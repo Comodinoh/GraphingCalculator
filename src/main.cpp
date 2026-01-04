@@ -1,4 +1,4 @@
-#include <ctype.h>
+#include <cctype>
 #include <cassert>
 #include <cstring>
 #include <cstdlib>
@@ -6,11 +6,25 @@
 #include <clocale>
 #include <cstdint>
 #include <cmath>
+#include <csignal>
 
 #define VARIABLE_NAME "x"
 
 typedef double (*func)(double);
 typedef double (*op_func)(double, double);
+
+void strim(char *s)
+{
+    int i;
+
+    while (isspace(*s)) s++;   // skip left side white spaces
+    for (i = strlen(s) - 1; (isspace(s[i])); i--) ;   // skip right side white spaces
+    s[i + 1] = '\0';
+}
+
+double dabs(double x) {
+    return x > 0 ? x : -x;
+}
 
 double add(double x, double y) {
     return x + y;
@@ -28,9 +42,9 @@ double div(double x, double y) {
     return x / y;
 }
 
-double pow(double x, double y) {
-    return pow(x, y);
-}
+//double pow(double x, double y) {
+//    return pow(x, y);
+//}
 
 double negate(double x, double y) {
     return -x;
@@ -72,12 +86,15 @@ enum class FunctionKind {
 
 enum class ConstantsKind {
     PI = 0,
+    E,
+    PHI,
     COUNT
 };
 
 struct Operator {
     char         op;
     size_t       arity;
+    size_t       precedence;
     bool         right_associative;
     op_func      f;
 };
@@ -92,27 +109,18 @@ struct Function {
     func f;
 };
 
-struct FunctionCall {
-    Function f;
-    double   arg;
-};
-struct OperatorCall {
-    Operator op;
-    double   x, y;
-};
-
 struct Token {
     TokenKind kind;
     char* name;
 };
 
 static Operator operator_table[] = {
-    {'+', 2, false, add},
-    {'-', 2, false, sub},
-    {'-', 1, false, negate},
-    {'*', 2, false, mul},
-    {'/', 2, false, div},
-    {'^', 2, true,  pow}
+    {'+', 2, 1, false, add},
+    {'-', 2, 1, false, sub},
+    {'-', 1, 1, false, negate},
+    {'*', 2, 2, false, mul},
+    {'/', 2, 2, false, div},
+    {'^', 2, 3, true,  pow}
 };
 
 double cotan(double x) {
@@ -132,12 +140,14 @@ static Function functions_table[] = {
     {"acotan", acotan},
     {"exp", exp},
     {"ln", log},
-    {"abs", abs},
+    {"abs", dabs},
     {"sqrt", sqrt},
 };
 
 static Constant constants_table[] = {
-    {"pi", 3.14}
+    {"pi", 3.1415926},
+    {"e", 2.71828182845904523536},
+    {"phi", 1.6180339}
 };
 
 
@@ -154,6 +164,13 @@ static Operator* getOperator(char op, size_t arity) {
 static bool isOperator(char op) {
     for (size_t i = 0; i < (size_t) OperatorKind::COUNT; i++) {
         if (operator_table[i].op == op) return true;
+    }
+    return false;
+}
+
+static bool isOperatorStr(const char* op) {
+    for(size_t i = 0; i < (size_t) OperatorKind::COUNT; i++) {
+        if(strcmp(&operator_table[i].op, op) == 0) return true;
     }
     return false;
 }
@@ -205,9 +222,9 @@ static const char* getTokenKindName(TokenKind kind) {
     case TokenKind::COND:
         return "Conditional";
     case TokenKind::PAREN_START:
-        return "(";
+        return "Open Paren";
     case TokenKind::PAREN_END:
-        return ")";
+        return "Close Paren";
     default:
         return "Unknown";
     }
@@ -358,7 +375,7 @@ struct Tokenizer {
             }
 
 
-            fprintf(stderr, "Unexpected Token at position %uz of string \"%dds\"\n", i, expr);
+            fprintf(stderr, "Unexpected Token at position %u of string \"%dds\"\n", i-1, expression);
             /*for (size_t i2 = 0; i2 < strlen("Unexpected Token at position %uz of string \"") + i - 1; i2++) {
                 printf(" ");
             }
@@ -376,10 +393,12 @@ struct Tokenizer {
 
 struct ParseNode {
     enum class Kind {
-        NUMBER, NAME, UNARY, BINARY, CALL
+        NUMBER, CONSTANT, VARIABLE, UNARY, BINARY, CALL
     };
 
     Kind kind;
+    ParseNode* r;
+    ParseNode* l;
     union {
         double n;
         Constant c;
@@ -407,8 +426,7 @@ struct ParseTree {
 
     Token* peek() {
         if (token_index >= tokenizer->count) {
-            fprintf(stderr, "Unexpected EOF");
-            exit(1);
+            return &EOF_TOKEN;
         }
         return &tokenizer->tokens[token_index];
     }
@@ -417,8 +435,7 @@ struct ParseTree {
         size_t pos = token_index + n;
 
         if (pos >= tokenizer->count) {
-            fprintf(stderr, "Unexpected EOF");
-            exit(1);
+            return &EOF_TOKEN;
         }
 
         return &tokenizer->tokens[pos];
@@ -428,6 +445,14 @@ struct ParseTree {
         Token* token = peek();
         if (token->kind != kind) {
             fprintf(stderr, "Expected %s but found %s", what, token->name);
+            exit(1);
+        }
+    }
+
+    void expect_not(TokenKind kind, const char* what) {
+        Token* token = peek();
+        if(token->kind == kind) {
+            fprintf(stderr, "Unexpected %s. Did you mean %s?", token->name, what);
             exit(1);
         }
     }
@@ -442,7 +467,7 @@ struct ParseTree {
             node->n = strtod(peek()->name, nullptr);
             break;
         }
-        case ParseNode::Kind::NAME:
+        case ParseNode::Kind::CONSTANT:
         {
             node->c = *getConstant(peek()->name);
             break;
@@ -470,28 +495,170 @@ struct ParseTree {
         Token* token = peek();
         switch (token->kind) {
         case TokenKind::NUMBER:
-            return CreateParseNode(ParseNode::Kind::NUMBER);
+            return CreateParseNode(ParseNode::Kind::NUMBER);            
+        case TokenKind::NAME:
+            {
+                if(peekN(1)->kind != TokenKind::PAREN_START) {
+                    expect_not(TokenKind::PAREN_END, "(");
+
+                    ParseNode* node;
+                    
+                    if(strcmp(token->name, "x") == 0) {
+                        node = CreateParseNode(ParseNode::Kind::VARIABLE);
+                    }else {
+                        node = CreateParseNode(ParseNode::Kind::CONSTANT);
+                    }
+
+                    return node;
+                }
+
+                if(!isFunctionValid(token->name)) {
+                    fprintf(stderr, "Invalid function name %s\n", token->name);
+                    exit(1);
+                }
+
+                ParseNode* function = CreateParseNode(ParseNode::Kind::CALL);
+
+                Next();
+                Next();
+
+                ParseNode* inside = ParseExpression(1);
+
+                expect(TokenKind::PAREN_END, ")");
+                
+
+                function->l = inside;
+                
+                return function;
+            }
         case TokenKind::OP:
-        {
-            return CreateParseNode(ParseNode::Kind::UNARY);
-        }
+            {
+                if(token_index == 0 || peekN(-1)->kind == TokenKind::PAREN_START) {
+                    ParseNode* node = CreateParseNode(ParseNode::Kind::UNARY);
+                    Next();
+
+                    ParseNode* inside = ParseToken();
+                    
+
+                    node->r = inside;
+                    
+                    return node;
+                }
+                fprintf(stderr, "Unexpected OP %s at index %u\n", token->name, token_index);
+                raise(SIGTRAP);
+            }
+        case TokenKind::PAREN_START:
+            {
+                Next();
+                ParseNode* inside = ParseExpression(1);
+                //printf("%d\n", peek()->kind);
+                expect(TokenKind::PAREN_END, ")");
+
+                return inside;
+            }
         }
     }
 
-    void ParseExpression(size_t min_prec) {
+    ParseNode* ParseExpression(size_t min_prec) {
+        ParseNode* left = ParseToken();
+        Next();
+        if(atEnd()) return left;
 
+        Token* next = peek();
+
+        while(!atEnd() && isOperatorStr(next->name)  && getOperator(next->name[0], 2)->precedence >= min_prec) {
+            Operator* op = getOperator(next->name[0], 2);
+            size_t next_prec = op->right_associative ? op->precedence : op->precedence + 1;
+
+            ParseNode* node = CreateParseNode(ParseNode::Kind::BINARY);
+
+            Next();
+
+            ParseNode* right = ParseExpression(next_prec);
+
+            node->l = left;
+            node->r = right;
+            
+            left = node;
+
+            
+            next = peek();
+        }
+
+        return left;
+    }
+
+    double Execute(double x, ParseNode* node) {
+        switch(node->kind) {
+        case ParseNode::Kind::NUMBER:
+            {
+                return node->n;
+            }
+        case ParseNode::Kind::BINARY:
+            {
+                double l = Execute(x, node->l);
+                double r = Execute(x, node->r);
+
+                return node->op.f(l, r);
+            }
+        case ParseNode::Kind::UNARY:
+            {
+                double n = Execute(x, node->r);
+
+                return node->op.f(n, 0);
+            }
+        case ParseNode::Kind::CALL:
+            {
+                double n = Execute(x, node->l);
+
+                return node->call.f(n);
+            }
+        case ParseNode::Kind::VARIABLE:
+            {
+                return x;
+            }
+        case ParseNode::Kind::CONSTANT:
+            {
+                return node->c.value;
+            }
+        }
     }
 
     void Parse() {
-        ParseExpression(1);
+        head = ParseExpression(1);
     }
 };
 
 
 int main() {
+    printf("Please Enter a function to parse: ");
+    fflush(stdout);
+
+    char* input = NULL;
+    size_t size = 0;
+
+    if(getline(&input, &size, stdin) < 0) {
+        fprintf(stderr, "Invalid input");
+        exit(1);
+    }
+    
+    strim(input);
+    
     Tokenizer tokenizer;
 
-    tokenizer.tokenize("2.2 + sin(x, x)");
+    tokenizer.tokenize(input);
     tokenizer.print();
+
+    ParseTree parser;
+
+    parser.Init(&tokenizer);
+    parser.Parse();
+
+    float x = 2;
+
+    printf("Value at x=%f -> %f\n", x, parser.Execute(x, parser.head));
+
+    free(input);
+
     return 0;
 }
