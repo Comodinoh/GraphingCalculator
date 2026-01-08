@@ -7,6 +7,15 @@
 #include <cstdint>
 #include <cmath>
 #include <csignal>
+#include <SFML/Graphics.hpp>
+#include <iostream>
+#include <cmath>
+
+using Vector2d = sf::Vector2<double>;
+
+using namespace std;
+const int LATIME_FEREASTRA = 800;
+const int INALTIME_FEREASTRA = 600;
 
 #define VARIABLE_NAME "x"
 
@@ -46,7 +55,7 @@ double div(double x, double y) {
 //    return pow(x, y);
 //}
 
-double negate(double x, double y) {
+double cnegate(double x, double y) {
     return -x;
 }
 
@@ -118,7 +127,7 @@ struct Token {
 static Operator operator_table[] = {
     {'+', 2, 1, false, add},
     {'-', 2, 1, false, sub},
-    {'-', 1, 1, false, negate},
+    {'-', 1, 1, false, cnegate},
     {'*', 2, 2, false, mul},
     {'/', 2, 2, false, div},
     {'^', 2, 3, true,  pow}
@@ -255,8 +264,10 @@ struct Tokenizer {
         for (size_t i = 0; i < count; i++) {
             free(tokens[i].name);
         }
-        free(tokens);
         free(expr);
+        count = 0;
+
+        memset(tokens, 0, sizeof(Token)*capacity);
     }
 
     void print() {
@@ -434,13 +445,14 @@ struct ParseNode {
 };
 
 struct ParseTree {
-    Tokenizer* tokenizer;
+    Tokenizer* tokenizer = nullptr;
     size_t token_index = 0;
 
     ParseNode* head = nullptr;
 
     void init(Tokenizer* tok) {
         tokenizer = tok;
+        token_index = 0;
     }
     void next() {
         token_index++;
@@ -691,38 +703,217 @@ struct ParseTree {
     }
 };
 
+struct StringBuffer {
+    char* buf = NULL;
+    size_t len = 0;
+    size_t capacity = 0;
 
-int main() {
-    printf("Please Enter a function to parse: ");
-    fflush(stdout);
+    void append(const char* str) {
+        size_t str_len = strlen(str);
 
-    char* input = NULL;
-    size_t size = 0;
+        if(len + str_len >= capacity) {
+            if(capacity != 0) {
+                while(len + str_len >= capacity) {
+                    capacity *= 2;
+                }
+            }else {
+                capacity = str_len+1;
+            }
+            
+            buf = (char*)realloc(buf, sizeof(char)*capacity);
+            
+        }
+        strncpy(&buf[len], str, str_len+1);
+        len += str_len;
+    }
 
-    if(getline(&input, &size, stdin) < 0) {
-        fprintf(stderr, "Invalid input");
-        exit(1);
+    void append_char(char c) {
+        if(len >= capacity) {
+            if(capacity != 0) {
+                capacity *= 2;
+            }else {
+                capacity = 256;
+            }
+            
+            buf = (char*)realloc(buf, sizeof(char)*capacity);
+        }
+
+        buf[len] = c;
+        len++;
+    }
+
+    void append_char_and_check_null_term(char c) {
+        append_char(c);
+        check_null_term();
+    }
+
+    void remove_head() {
+        if(len != 0) {
+            buf[len-1] = '\0';
+            len--;
+        }
+        
     }
     
-    strim(input);
     
+    void check_null_term() {
+        if(len != 0 && buf[len] != '\0') buf[len] = '\0';
+    }
+    
+};
+
+
+int main()
+{
+
     Tokenizer tokenizer;
-
-    tokenizer.tokenize(input);
-    tokenizer.print();
-
     ParseTree parser;
 
-    parser.init(&tokenizer);
-    parser.parse();
+    sf::ContextSettings settings;
 
-    float x = 2;
+    settings.antiAliasingLevel = sf::RenderTexture::getMaximumAntiAliasingLevel();
+    sf::RenderWindow fereastra(sf::VideoMode({LATIME_FEREASTRA, INALTIME_FEREASTRA}), "Sistem de Coordonate XOY", sf::Style::Default, sf::State::Windowed, settings);
 
-    printf("Value at x=%f -> %f\n", x, parser.execute(x, parser.head));
+    fereastra.setVerticalSyncEnabled(true);
+    sf::View camera(sf::Vector2f(0.0f, 0.0f), sf::Vector2f(20.0f, 15.0f));
+
+    bool tragDeEcran = false;
+    sf::Vector2i pozitieVecheMouse;
+
+    StringBuffer buffer;
+    sf::Font font;
+
+    if(!font.openFromFile("MinecraftDefault-Regular.ttf")) {
+        return 1;
+    }
+    
+    sf::Text text(font);
+
+    //sf::VertexBuffer buffer(sf::PrimitiveType::LineStrip, sf::VertexBuffer::Usage::Static);
+
+    //size_t previousSize = 0;
+
+    while (fereastra.isOpen())
+    {
+        while (std::optional event = fereastra.pollEvent())
+        {
+            if (event->is<sf::Event::Closed>())
+                fereastra.close();
 
 
+            if (sf::Event::MouseWheelScrolled* scroll = event->getIf<sf::Event::MouseWheelScrolled>())
+            {
+                if (scroll->delta > 0)
+                {
+                    camera.zoom(0.9f);
+                }
+                else
+                {
+                    camera.zoom(1.1f);
+                }
+            }
 
-    free(input);
 
+            if (sf::Event::MouseButtonPressed* pressed = event->getIf<sf::Event::MouseButtonPressed>())
+            {
+                tragDeEcran = true;
+                pozitieVecheMouse = sf::Mouse::getPosition(fereastra);
+            }
+            if (event->is<sf::Event::MouseButtonReleased>())
+            {
+                tragDeEcran = false;
+            }
+            if (event->is<sf::Event::MouseMoved>() && tragDeEcran)
+            {
+                sf::Vector2i pozitieNouaMouse = sf::Mouse::getPosition(fereastra);
+
+                sf::Vector2f delta = fereastra.mapPixelToCoords(pozitieVecheMouse, camera) - fereastra.mapPixelToCoords(pozitieNouaMouse, camera);
+                
+                camera.move(delta);
+                                     
+                pozitieVecheMouse = pozitieNouaMouse;
+            }
+
+
+            if (sf::Event::Resized* resized = event->getIf<sf::Event::Resized>())
+            {
+                float aspect = (float)resized->size.x / resized->size.y;
+                camera.setSize({camera.getSize().y * aspect, camera.getSize().y});
+            }
+
+            if(sf::Event::TextEntered* text = event->getIf<sf::Event::TextEntered>()) {
+                char c = (char)text->unicode;
+                if(c == '\r') {
+                    if(tokenizer.expr != nullptr) tokenizer.destroy();
+                    tokenizer.tokenize(buffer.buf);
+                    parser.init(&tokenizer);
+                    parser.parse();
+                } else if(c == '\b') {
+                    buffer.remove_head();
+                } else{
+                    buffer.append_char(c);
+                    printf("%c\n", c);
+                }
+            }
+            
+        }
+        
+
+        fereastra.clear(sf::Color(20, 20, 30));
+        fereastra.setView(fereastra.getDefaultView());
+
+        buffer.check_null_term();
+        text.setString(buffer.buf);
+
+        fereastra.draw(text);
+        
+        fereastra.setView(camera);
+
+        sf::Vector2f centru = camera.getCenter();
+        sf::Vector2f marime = camera.getSize();
+        float stanga = centru.x - marime.x / 2;
+        float dreapta = centru.x + marime.x / 2;
+        float sus = centru.y - marime.y / 2;
+        float jos = centru.y + marime.y / 2;
+
+        sf::Vertex axaX[] =
+        {
+            sf::Vertex(sf::Vector2f(stanga, 0), sf::Color::White),
+            sf::Vertex(sf::Vector2f(dreapta, 0), sf::Color::White)
+        };
+        sf::Vertex axaY[] =
+        {
+            sf::Vertex(sf::Vector2f(0, sus), sf::Color::White),
+            sf::Vertex(sf::Vector2f(0, jos), sf::Color::White)
+        };
+
+        fereastra.draw(axaX, 2, sf::PrimitiveType::Lines);
+        fereastra.draw(axaY, 2, sf::PrimitiveType::Lines);
+
+        double distance = marime.x;
+
+        //printf("Drawing at distance: %f\n", distance);
+
+        if(parser.tokenizer != NULL) {
+
+            size_t vertices = max((uint32_t)2, fereastra.getSize().x);
+            sf::VertexArray array = sf::VertexArray{sf::PrimitiveType::LineStrip, vertices};
+            //sf::Vertex* va = (sf::Vertex*)malloc(sizeof(sf::Vertex)*vertices);
+
+            double dx = (marime.x) / (double)(vertices-1);
+
+            for(size_t i = 0; i < vertices; i++) {
+                double x = i*dx + stanga;
+                array[i].position = sf::Vector2f(x, parser.execute(x, parser.head));
+            }
+
+
+            fereastra.draw(array);
+
+        }
+
+        
+        fereastra.display();
+    }
     return 0;
 }
