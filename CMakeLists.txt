@@ -2,7 +2,8 @@
 
 project("GraphingCalculator")
 
-add_executable(GraphingCalculator src/main.cpp)
+add_executable(GraphingCalculator src/expressions.h src/ui.h src/main.cpp)
+target_include_directories(GraphingCalculator PRIVATE src)
 
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 
@@ -13,5 +14,6 @@ endif()
 add_subdirectory(vendor/SFML)
 
 target_link_libraries(GraphingCalculator PRIVATE SFML::Graphics SFML::System)
+target_include_directories(GraphingCalculator PRIVATE vendor/SFML/include)
 
 # TODO: Add tests and install targets if needed.
