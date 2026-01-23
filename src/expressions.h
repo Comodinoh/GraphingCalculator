@@ -1,6 +1,7 @@
 #ifndef GRAFIC_EXPRESSIONS_H
 #define GRAFIC_EXPRESSIONS_H
 
+#include "ui.h"
 #include <cctype>
 #include <cassert>
 #include <cstring>
@@ -42,6 +43,33 @@ double mul(double x, double y) {
 
 double div(double x, double y) {
     return x / y;
+}
+
+double fib(double x) {
+    if (x <= 1) {
+        return x;
+    }
+    return fib(x - 1) + fib(x - 2);
+}
+
+
+double gamma(double x) {
+    double step = 1.0;
+    double max = 1000;
+
+    double t = 0;
+    double sum = 0.0;
+    while (t <= max) {
+        double y = exp(log(t)*(x-1)-t);
+        sum += t * y;
+        t += step;
+    }
+    return sum;
+}
+
+double fact(double x) {
+    if (x <= 1.0) return 1.0;
+    return x * fact(x - 1.0);
 }
 
 //double pow(double x, double y) {
@@ -144,7 +172,7 @@ static Function functions_table[] = {
     {"exp", exp},
     {"ln", log},
     {"abs", dabs},
-    {"sqrt", sqrt},
+    {"sqrt", sqrt}
 };
 
 static Constant constants_table[] = {
@@ -233,13 +261,22 @@ static const char* getTokenKindName(TokenKind kind) {
     }
 }
 
-static Token EOF_TOKEN = { TokenKind::TKEOF, 0, "EOF"};
-
 struct Tokenizer {
     size_t count = 0;
     size_t capacity = 4;
     Token* tokens = (Token*) malloc(sizeof(Token) * capacity);
+    Token eof_token;
     char* expr = nullptr;
+
+    Tokenizer() {
+        char* str = strdup("EOF");
+
+        eof_token = { TokenKind::TKEOF, 0, str };
+    }
+
+    ~Tokenizer() {
+        free(eof_token.name);
+    }
 
     void add_token(Token* token) {
         if (count >= capacity) {
@@ -258,6 +295,7 @@ struct Tokenizer {
             free(tokens[i].name);
         }
         free(expr);
+        expr = nullptr;
         count = 0;
 
         memset(tokens, 0, sizeof(Token)*capacity);
@@ -396,14 +434,14 @@ struct Tokenizer {
         }
     }
 
-    void print_at_token(size_t index) {
+    void print_at_token(StringBuffer *buffer, size_t index) {
         assert(index < count);
 
         Token* token = &tokens[index];
 
         size_t tk_len = strlen(token->name);
 
-        printf("%s\n", expr);
+        buffer->appendf("%s\n", expr);
 
         char* spacer = (char*)malloc(sizeof(char)*token->og_index+1);
         memset(spacer, ' ', sizeof(char)*token->og_index);
@@ -413,8 +451,8 @@ struct Tokenizer {
         memset(delim, '~', sizeof(char)*tk_len);
         delim[tk_len] = '\0';
 
-        printf("%s%s\n", spacer, delim);
-        printf("%s^\n", spacer);
+        buffer->appendf("%s%s\n", spacer, delim);
+        buffer->appendf("%s^\n", spacer);
 
         free(spacer);
         free(delim);
@@ -441,7 +479,10 @@ struct ParseTree {
     Tokenizer* tokenizer = nullptr;
     size_t token_index = 0;
 
+    StringBuffer debug_buffer;
+
     ParseNode* head = nullptr;
+    bool has_error = false;
 
     void init(Tokenizer* tok) {
         tokenizer = tok;
@@ -467,7 +508,7 @@ struct ParseTree {
 
     Token* peek() {
         if (token_index >= tokenizer->count) {
-            return &EOF_TOKEN;
+            return &tokenizer->eof_token;
         }
         return &tokenizer->tokens[token_index];
     }
@@ -476,28 +517,30 @@ struct ParseTree {
         size_t pos = token_index + n;
 
         if (pos >= tokenizer->count) {
-            return &EOF_TOKEN;
+            return &tokenizer->eof_token;
         }
 
         return &tokenizer->tokens[pos];
     }
 
-    void expect(TokenKind kind, const char* what) {
+    bool expect(TokenKind kind, const char* what) {
         Token* token = peek();
         if (token->kind != kind) {
-            fprintf(stderr, "Expected token %s but found %s [index = %u]\n", what, peekN(-1)->name, token_index-1);
-            tokenizer->print_at_token(token_index-1);
-            exit(1);
+            debug_buffer.appendf("Expected token %s but found %s [index = %u]\n", what, peekN(-1)->name, token_index-1);
+            tokenizer->print_at_token(&debug_buffer, token_index-1);
+            return false;
         }
+        return true;
     }
 
-    void expectNot(TokenKind kind) {
+    bool expectNot(TokenKind kind) {
         Token* token = peek();
         if(token->kind == kind) {
-            fprintf(stderr, "Unexpected token %s [index = %u]\n", token->name, token_index);
-            tokenizer->print_at_token(token_index);
-            exit(1);
+            debug_buffer.appendf("Unexpected token %s [index = %u]\n", token->name, token_index);
+            tokenizer->print_at_token(&debug_buffer, token_index);
+            return false;
         }
+        return true;
     }
 
     ParseNode* createParseNode(ParseNode::Kind kind) {
@@ -538,83 +581,94 @@ struct ParseTree {
         Token* token = peek();
         switch (token->kind) {
         case TokenKind::NUMBER:
-            return createParseNode(ParseNode::Kind::NUMBER);            
+            return createParseNode(ParseNode::Kind::NUMBER);
         case TokenKind::NAME:
-            {
-                if(peekN(1)->kind != TokenKind::PAREN_START) {
-                    expectNot(TokenKind::PAREN_END);
+        {
+            if (peekN(1)->kind != TokenKind::PAREN_START) {
+                if (!expectNot(TokenKind::PAREN_END)) return nullptr;
 
-                    ParseNode* node;
-                    
-                    if(strcmp(token->name, VARIABLE_NAME) == 0) {
-                        node = createParseNode(ParseNode::Kind::VARIABLE);
-                    }else {
-                        if(!isConstantValid(token->name)) {
-                            fprintf(stderr, "Unexpected symbol %s\n", token->name);
-                            exit(1);
-                        }
-                        node = createParseNode(ParseNode::Kind::CONSTANT);
+                ParseNode* node;
+
+                if (strcmp(token->name, VARIABLE_NAME) == 0) {
+                    node = createParseNode(ParseNode::Kind::VARIABLE);
+                }
+                else {
+                    if (!isConstantValid(token->name)) {
+                        debug_buffer.appendf("Unexpected symbol %s\n", token->name);
+                        return nullptr;
                     }
-
-                    return node;
+                    node = createParseNode(ParseNode::Kind::CONSTANT);
                 }
 
-                if(!isFunctionValid(token->name)) {
-                    fprintf(stderr, "Invalid function name %s\n", token->name);
-                    exit(1);
-                }
-
-                ParseNode* function = createParseNode(ParseNode::Kind::CALL);
-
-                next();
-                next();
-
-                expectNot(TokenKind::PAREN_END);
-
-                ParseNode* inside = parseExpression(1);
-
-                next();
-                expect(TokenKind::PAREN_END, ")");
-
-                function->l = inside;
-                
-                return function;
+                return node;
             }
+
+            if (!isFunctionValid(token->name)) {
+                debug_buffer.appendf("Invalid function name %s\n", token->name);
+                return nullptr;
+            }
+
+            ParseNode* function = createParseNode(ParseNode::Kind::CALL);
+
+            //if (function == nullptr) return nullptr;
+
+            next();
+            next();
+
+            if (!expectNot(TokenKind::PAREN_END)) return nullptr;
+
+            ParseNode* inside = parseExpression(1);
+
+            //if (inside == nullptr) return nullptr;
+
+            next();
+            if (!expect(TokenKind::PAREN_END, ")")) return nullptr;
+
+            function->l = inside;
+
+            return function;
+        }
         case TokenKind::OP:
-            {
-                if(token_index == 0 || peekN(-1)->kind == TokenKind::PAREN_START) {
-                    ParseNode* node = createParseNode(ParseNode::Kind::UNARY);
-                    next();
+        {
+            if (token_index == 0 || peekN(-1)->kind == TokenKind::PAREN_START) {
+                ParseNode* node = createParseNode(ParseNode::Kind::UNARY);
+                next();
 
-                    ParseNode* inside = parseToken();
-                    
+                ParseNode* inside = parseToken();
 
-                    node->r = inside;
-                    
-                    return node;
-                }
-                fprintf(stderr, "Unexpected OP %s at index %u\n", token->name, token_index);
-                exit(1);
+
+                node->r = inside;
+
+                return node;
             }
+            debug_buffer.appendf("Unexpected OP %s at index %u\n", token->name, token_index);
+            return nullptr;
+        }
         case TokenKind::PAREN_START:
-            {
-                next();
-                expectNot(TokenKind::PAREN_END);
-                ParseNode* inside = parseExpression(1);
-                //printf("%d\n", peek()->kind);
-                next();
-                expect(TokenKind::PAREN_END, ")");
+        {
+            next();
+            if (!expectNot(TokenKind::PAREN_END)) return nullptr;
+            ParseNode* inside = parseExpression(1);
+            if (inside == nullptr) return nullptr;
+            //printf("%d\n", peek()->kind);
+            next();
+            if (!expect(TokenKind::PAREN_END, ")")) return nullptr;
 
-                return inside;
-            }
+            return inside;
+        }
+        case TokenKind::PAREN_END:
+        {
+            debug_buffer.append("Unexpected )\n");
+            return nullptr;
+        }
         }
     }
 
     ParseNode* parseExpression(size_t min_prec) {
         if(atEnd()) {
-            fprintf(stderr, "Unexpected EOF. Tried parsing Empty expression\n");
-            tokenizer->print_at_token(token_index-1);
-            exit(1);
+            debug_buffer.append("Unexpected EOF. Tried parsing Empty expression\n");
+            tokenizer->print_at_token(&debug_buffer, token_index-1);
+            return nullptr;
         }
         
         ParseNode* left = parseToken();
@@ -633,14 +687,16 @@ struct ParseTree {
 
 
             if(atEndN(1)) {
-                fprintf(stderr, "Unexpected EOF at token %s [index = %u]\n", peek()->name, token_index);
-                tokenizer->print_at_token(token_index);
-                exit(1);
+                debug_buffer.appendf("Unexpected EOF at token %s [index = %u]\n", peek()->name, token_index);
+                tokenizer->print_at_token(&debug_buffer, token_index);
+                return nullptr;
             }
 
             this->next();
          
             ParseNode* right = parseExpression(next_prec);
+
+            if (right == nullptr) return nullptr;
 
             node->l = left;
             node->r = right;
@@ -656,6 +712,7 @@ struct ParseTree {
     
 
     double execute(double x, ParseNode* node) {
+        if (node == nullptr) return 0;
         switch(node->kind) {
         case ParseNode::Kind::NUMBER:
             {
@@ -693,6 +750,7 @@ struct ParseTree {
 
     void parse() {
         head = parseExpression(1);
+        if (head == nullptr) has_error = true;
     }
 };
 

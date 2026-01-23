@@ -1,5 +1,8 @@
 #include <SFML/Graphics.hpp>
 
+#include <filesystem>
+#include <unordered_set>
+
 #include "expressions.h"
 #include "ui.h"
 
@@ -10,80 +13,205 @@ const int INALTIME_FEREASTRA = 600;
 const int LATIME_FEREASTRA = INALTIME_FEREASTRA*(16.0f/9.0f);
 
 
-struct StringBuffer {
-    char* buf = NULL;
-    size_t len = 0;
-    size_t capacity = 0;
+static bool VIEW_COORDS = false;
 
-    void append(const char* str) {
-        size_t str_len = strlen(str);
+void deseneazaSageata(sf::RenderWindow& fereastra, sf::Vector2f varf, float rotatie, float marime)
+{
+    sf::ConvexShape sageata;
+    sageata.setPointCount(3);
+    sageata.setPoint(0, sf::Vector2f(0, 0));
+    sageata.setPoint(1, sf::Vector2f(-marime, -marime / 3.0f));
+    sageata.setPoint(2, sf::Vector2f(-marime, marime / 3.0f));
 
-        if(len + str_len >= capacity) {
-            if(capacity != 0) {
-                while(len + str_len >= capacity) {
-                    capacity *= 2;
-                }
-            }else {
-                capacity = str_len+1;
+    sageata.setFillColor(lineColors[currentTheme]);
+    sageata.setPosition(varf);
+    sageata.setRotation(sf::degrees(rotatie));
+
+    fereastra.draw(sageata);
+}
+
+static double clampd(double v, double lo, double hi) {
+    return v < lo ? lo : (v > hi ? hi : v);
+}
+
+static int niceStep(double approx) {
+    if (approx <= 1.0) return 1;
+    double p = std::pow(10.0, std::floor(std::log10(approx)));
+    double m = approx / p;
+    if (m <= 1.0) return (int)(1.0 * p);
+    if (m <= 2.0) return (int)(2.0 * p);
+    if (m <= 5.0) return (int)(5.0 * p);
+    return (int)(10.0 * p);
+}
+
+static int firstMultiple(int a, int step) {
+    if (step <= 0) return a;
+    int r = a % step;
+    if (r == 0) return a;
+    if (a >= 0) return a + (step - r);
+    return a - r;
+}
+
+void drawTickX(sf::RenderWindow* w, double x, double tickLen) {
+    
+    sf::Vertex tick[] = {
+        sf::Vertex(sf::Vector2f((float)x, (float)-tickLen), lineColors[currentTheme]),
+        sf::Vertex(sf::Vector2f((float)x, (float)+tickLen), lineColors[currentTheme]),
+    };
+    w->draw(tick, 2, sf::PrimitiveType::Lines);
+}
+
+void drawTickY(sf::RenderWindow* w, double y, double tickLen) {
+    sf::Vertex tick[] = {
+        sf::Vertex(sf::Vector2f((float)-tickLen, (float)y), lineColors[currentTheme]),
+        sf::Vertex(sf::Vector2f((float)+tickLen, (float)y), lineColors[currentTheme]),
+    };
+    w->draw(tick, 2, sf::PrimitiveType::Lines);
+}
+
+void deseneazaAsimptota(sf::RenderWindow* w, float x, float start, float end) {
+    sf::Color color = { 255, 0, 0, 255 };
+    sf::Vertex lines[6] = {
+        {sf::Vector2f{x, start}, color},
+        {sf::Vector2f{x, end}, color},
+        {{x + 0.1f, start}, color},
+        {{x + 0.1f, end }, color},
+        {{x - 0.1f, start }, color},
+        {{x - 0.1f, end }, color},
+    };
+
+    w->draw(lines, 6, sf::PrimitiveType::Lines);
+}
+
+void deseneazaGrafic(sf::RenderWindow* fereastra,
+    ParseTree* parser,
+    sf::VertexArray* array,
+    double startX,
+    double width,
+    size_t vertices,
+    sf::View* camera,
+    sf::View* uiView,
+    sf::Font* font,
+    bool drawUnits)
+{
+    sf::Vector2f cf = camera->getCenter();
+    sf::Vector2f cs = camera->getSize();
+
+    double stanga = (double)cf.x - (double)cs.x / 2.0;
+    double dreapta = (double)cf.x + (double)cs.x / 2.0;
+    double sus = (double)cf.y - (double)cs.y / 2.0;
+    double jos = (double)cf.y + (double)cs.y / 2.0;
+
+    double dx = width / (double)(vertices - 1);
+
+    double tickLen = (double)cs.y * 0.015;
+
+    fereastra->setView(*camera);
+    if (parser->tokenizer != NULL && parser->debug_buffer.len == 0) {
+
+        for (size_t i = 0; i < vertices-1; i++) {
+            double x1 = (double)i * dx + startX;
+            double x2 = (double)(i + 1) * dx + startX;
+            double y1 = -parser->execute(x1, parser->head);
+            double y2 = -parser->execute(x2, parser->head);
+
+            double threshold = camera->getSize().y * 1.0f;
+
+            sf::Vector2f centru = camera->getCenter();
+            sf::Vector2f marime = camera->getSize();
+            float sus = centru.y - marime.y / 2;
+            float jos = centru.y + marime.y / 2;
+
+            if (!std::isfinite(y1) || !std::isfinite(y2)) {
+                //deseneazaAsimptota(fereastra, (x1 + x2) / 2.0f, sus, jos);
+                continue;
             }
-            
-            buf = (char*)realloc(buf, sizeof(char)*capacity);
-            
-        }
-        strncpy(&buf[len], str, str_len+1);
-        len += str_len;
-    }
 
-    void append_char(char c) {
-        if(len >= capacity) {
-            if(capacity != 0) {
-                capacity *= 2;
-            }else {
-                capacity = 256;
+            if (std::abs(y2 - y1) > threshold) {
+               // deseneazaAsimptota(fereastra, (x1 + x2) / 2.0f, sus, jos);
+                continue;
             }
-            
-            buf = (char*)realloc(buf, sizeof(char)*capacity);
+
+            double big = camera->getSize().y * 5.0;
+            if (std::abs(y1) > big || std::abs(y2) > big) {
+               // deseneazaAsimptota(fereastra, (x1 + x2) / 2.0f, sus, jos);
+                continue;
+            }
+            if (std::abs(y1) > big && std::abs(y2) > big && (y1 > 0) != (y2 > 0)) {
+               // deseneazaAsimptota(fereastra, (x1 + x2) / 2.0f, sus, jos);
+                continue;
+            }
+
+            array->append({ sf::Vector2f((float)x1, (float)y1),  lineColors[currentTheme] });
+            array->append({ sf::Vector2f((float)x2, (float)y2),  lineColors[currentTheme] });
         }
 
-        buf[len] = c;
-        len++;
+        fereastra->draw(*array);
     }
 
-    void append_char_and_check_null_term(char c) {
-        append_char(c);
-        check_null_term();
+    if (!drawUnits) return;
+
+    double approx = (double)camera->getSize().x / 12.0;
+    int step = niceStep(approx);
+
+    int xStart = (int)std::ceil(std::max(stanga, startX));
+    int xEnd = (int)std::floor(std::min(dreapta, startX + width));
+
+    int yStart = (int)std::ceil(sus);
+    int yEnd = (int)std::floor(jos);
+
+    for (int xi = firstMultiple(xStart, step); xi <= xEnd; xi += step) {
+        if (xi == 0) continue;
+        if (std::abs(xi) < 1) continue;
+        drawTickX(fereastra, (double)xi, tickLen);
     }
 
-    void remove_head() {
-        if(len != 0) {
-            buf[len-1] = '\0';
-            len--;
-        }
-        
+    for (int yi = firstMultiple(yStart, step); yi <= yEnd; yi += step) {
+        if (yi == 0) continue;
+        if (std::abs(yi) < 1) continue;
+        drawTickY(fereastra, (double)yi, tickLen);
     }
 
-    void remove_at(size_t pos, size_t amount) {
-        if(len == 0 ) return;
+    sf::Text t(*font);
+    sf::Vector2u win = fereastra->getSize();
+    unsigned int charSize = (unsigned int)std::clamp((int)std::llround(18.0 * ((double)win.y / 720.0)), 14, 30);
+    t.setCharacterSize(charSize);
+    t.setFillColor(textColors[currentTheme]);
 
-        size_t final_pos = pos + amount - 1;
-        size_t amount_to_move = len-final_pos+1; // #0 1 2# 3 4
+    fereastra->setView(*uiView);
 
-        for(size_t i = 0; i < amount_to_move; i++;) {
-            
-        }
-        
-        
-        
-        
+    for (int xi = firstMultiple(xStart, step); xi <= xEnd; xi += step) {
+        if (xi == 0) continue;
+        if (std::abs(xi) < 1) continue;
+
+        sf::Vector2i px = fereastra->mapCoordsToPixel(sf::Vector2f((float)xi, 0.f), *camera);
+        sf::Vector2f ui = fereastra->mapPixelToCoords(px, *uiView);
+
+        t.setString(std::to_string(xi));
+        sf::FloatRect b = t.getLocalBounds();
+        t.setOrigin({ b.position.x + b.size.x / 2.f, 0.f });
+        t.setPosition({ ui.x, ui.y + 8.f });
+        fereastra->draw(t);
     }
-    
-    
-    void check_null_term() {
-        if(len != 0 && buf[len] != '\0') buf[len] = '\0';
-    }
-    
-};
 
+    for (int yi = firstMultiple(yStart, step); yi <= yEnd; yi += step) {
+        if (yi == 0) continue;
+        if (std::abs(yi) < 1) continue;
+
+        int labelVal = -yi;
+
+        sf::Vector2i px = fereastra->mapCoordsToPixel(sf::Vector2f(0.f, (float)yi), *camera);
+        sf::Vector2f ui = fereastra->mapPixelToCoords(px, *uiView);
+
+        t.setString(std::to_string(labelVal));
+        sf::FloatRect b = t.getLocalBounds();
+        t.setOrigin({ 0.f, b.position.y + b.size.y / 2.f });
+        t.setPosition({ ui.x + 12.f, ui.y });
+        fereastra->draw(t);
+    }
+
+    fereastra->setView(*camera);
+}
 
 int main()
 {
@@ -94,28 +222,41 @@ int main()
     sf::ContextSettings settings;
 
     settings.antiAliasingLevel = sf::RenderTexture::getMaximumAntiAliasingLevel();
-    sf::RenderWindow fereastra(sf::VideoMode({LATIME_FEREASTRA, INALTIME_FEREASTRA}), "Sistem de Coordonate XOY", sf::Style::Default, sf::State::Windowed, settings);
+    sf::RenderWindow fereastra(sf::VideoMode(sf::Vector2u(UI_BASE_SIZE)), "Sistem de Coordonate XOY", sf::Style::Default, sf::State::Windowed, settings);
 
     fereastra.setVerticalSyncEnabled(true);
-    sf::View camera(sf::Vector2f(0.0f, 0.0f), sf::Vector2f(20.0f, 15.0f));
+    sf::Vector2f cameraStartPos = sf::Vector2f(0.0f, 0.0f);
+    sf::Vector2f cameraStartSize = sf::Vector2f(10.0f, 5.0f);
+    sf::View camera(cameraStartPos, cameraStartSize);
 
     bool tragDeEcran = false;
-    sf::Vector2i pozitieVecheMouse(0, 0);
-
-    Button button = {{200, 50}, {0, 0}, {100, 100, 100, 200}};
-
-    StringBuffer buffer;
-    sf::Font font;
-
-    if(!font.openFromFile("MinecraftDefault-Regular.ttf")) {
-        return 1;
-    }
-
-    font.setSmooth(true);
-    
-    sf::Text text(font);
 
     sf::View default_view = fereastra.getDefaultView();
+
+    Button resetButton = make_button("Reset", sf::Vector2f{ UI_BASE_SIZE.x-100, 10.0f},  
+        {90, 30});
+    Button themeButton = make_button("Theme", sf::Vector2f(UI_BASE_SIZE.x - 190, 10.0f),
+        { 90, 30 });
+    Button coordButton = make_button("XY", sf::Vector2f(UI_BASE_SIZE.x - 280, 10.0f),
+        { 90, 30 });
+
+    resetButton.setAnchor(UIAnchor::TopRight);
+    themeButton.setAnchor(UIAnchor::TopRight, { 110.0f, 10.0f });
+    coordButton.setAnchor(UIAnchor::TopRight, { 210.0f, 10.0f });
+
+    StringBuffer buffer;
+    StringBuffer coordBuffer;
+
+    TextDisplay function_display = create_text_display(&buffer);
+    TextDisplay debug_display = create_text_display(&parser.debug_buffer);
+    TextDisplay coord_display = create_text_display(&coordBuffer);
+    debug_display.text.setPosition({ 0, 70 });
+    coord_display.text.setPosition({ 0, 100 });
+    function_display.text.setCharacterSize(64);
+    function_display.text.setStyle(sf::Text::Bold);
+
+
+
 
     //sf::VertexBuffer buffer(sf::PrimitiveType::LineStrip, sf::VertexBuffer::Usage::Static);
 
@@ -145,7 +286,22 @@ int main()
             if (sf::Event::MouseButtonPressed* pressed = event->getIf<sf::Event::MouseButtonPressed>())
             {
                 sf::Vector2f mpos = fereastra.mapPixelToCoords(sf::Mouse::getPosition(fereastra), default_view);
-                if(!button.is_pressed({mpos.x, mpos.y})) {
+                if (resetButton.isHovered(mpos)) {
+                    camera.setCenter(cameraStartPos);
+                    camera.setSize(cameraStartSize);
+                }
+                else if (themeButton.isHovered(mpos)) {
+                    if (currentTheme == themes - 1) {
+                        currentTheme = 0;
+                    }
+                    else {
+                        currentTheme++;
+                    }
+                }
+                else if (coordButton.isHovered(mpos)) {
+                    VIEW_COORDS = !VIEW_COORDS;
+                }
+                else {
                     pozitieVecheMouse = sf::Mouse::getPosition(fereastra);
                     tragDeEcran = true;
                 }
@@ -153,10 +309,6 @@ int main()
             }
             if (event->is<sf::Event::MouseButtonReleased>())
             {
-                sf::Vector2f mpos = fereastra.mapPixelToCoords(pozitieVecheMouse, default_view);
-                if(!tragDeEcran && button.is_pressed(mpos)) {
-                    button.color = sf::Color::Green;
-                }
                 
                 if(tragDeEcran) {
                     tragDeEcran = false;
@@ -180,42 +332,39 @@ int main()
             {
                 float aspect = (float)resized->size.x / resized->size.y;
                 camera.setSize({camera.getSize().y * aspect, camera.getSize().y});
-                
-                default_view.setSize({resized->size.x, resized->size.y});
-                default_view.setCenter({resized->size.x/2, resized->size.y/2});
-                
-                //text.setPosition({default_view.getCenter().x - default_view.getSize().x/2, default_view.getCenter().y - default_view.getSize().y/2});
+               
+
+                //uiView.setViewport(sf::FloatRect({posX, posY}, {sizeX, sizeY}));
+
+                default_view.setSize(sf::Vector2f{ resized->size });
+                default_view.setCenter(sf::Vector2f{ resized->size } / 2.0f);
             }
 
             if(sf::Event::TextEntered* text = event->getIf<sf::Event::TextEntered>()) {
                 char c = (char)text->unicode;
                 if(c == '\r') {
-                    if(tokenizer.expr != nullptr) tokenizer.destroy();
-                    tokenizer.tokenize(buffer.buf);
-                    parser.init(&tokenizer);
-                    parser.parse();
+                    parser.debug_buffer.reset();
+                    if (buffer.len == 0) {
+                        tokenizer.destroy();
+                        parser.tokenizer = nullptr;
+                    } else {
+                        if (tokenizer.expr != nullptr) tokenizer.destroy();
+                        tokenizer.tokenize(buffer.buf);
+                        parser.init(&tokenizer);
+                        parser.parse();
+                    }
                 } else if(c == '\b') {
                     buffer.remove_head();
                 } else{
                     buffer.append_char(c);
-                    printf("%c\n", c);
                 }
             }
             
         }
         
 
-        fereastra.clear(sf::Color(20, 20, 30));
-        fereastra.setView(default_view);
-
-        //printf("%f %f\n", camera.getCenter().x, camera.getSize().x);
+        fereastra.clear(backgroundColors[currentTheme]);
         
-        buffer.check_null_term();
-        text.setString(buffer.buf);
-
-        
-        button.draw(&fereastra);
-        fereastra.draw(text);
         
         fereastra.setView(camera);
 
@@ -226,42 +375,66 @@ int main()
         float sus = centru.y - marime.y / 2;
         float jos = centru.y + marime.y / 2;
 
+        sf::Color lineColor = lineColors[currentTheme];
+
         sf::Vertex axaX[] =
         {
-            sf::Vertex(sf::Vector2f(stanga, 0), sf::Color::White),
-            sf::Vertex(sf::Vector2f(dreapta, 0), sf::Color::White)
+            
+            sf::Vertex(sf::Vector2f(stanga, 0), lineColor),
+            sf::Vertex(sf::Vector2f(dreapta, 0), lineColor)
         };
         sf::Vertex axaY[] =
         {
-            sf::Vertex(sf::Vector2f(0, sus), sf::Color::White),
-            sf::Vertex(sf::Vector2f(0, jos), sf::Color::White)
+            sf::Vertex(sf::Vector2f(0, sus), lineColor),
+            sf::Vertex(sf::Vector2f(0, jos), lineColor)
         };
 
         fereastra.draw(axaX, 2, sf::PrimitiveType::Lines);
         fereastra.draw(axaY, 2, sf::PrimitiveType::Lines);
 
-        double distance = marime.x;
+        float marimeSageata = marime.x * 0.02f;
+        deseneazaSageata(fereastra, sf::Vector2f(dreapta, 0), 0.0f, marimeSageata);
+        deseneazaSageata(fereastra, sf::Vector2f(0, sus), -90.0f, marimeSageata);
+
 
         //printf("Drawing at distance: %f\n", distance);
 
-        if(parser.tokenizer != NULL) {
+        
+            size_t vertices = std::clamp((int)fereastra.getSize().x * 2, 200, 8000);
 
-            size_t vertices = max((uint32_t)2, fereastra.getSize().x);
-            sf::VertexArray array = sf::VertexArray{sf::PrimitiveType::LineStrip, vertices};
-            //sf::Vertex* va = (sf::Vertex*)malloc(sizeof(sf::Vertex)*vertices);
+            /*if (array.getVertexCount() < vertices) {
+                array.resize(vertices);
+            }*/
+            sf::VertexArray array(sf::PrimitiveType::Lines);
 
-            double dx = (marime.x) / (double)(vertices-1);
+            deseneazaGrafic(&fereastra, &parser, &array, stanga, marime.x, vertices, &camera, &default_view, &font, true);
 
-            for(size_t i = 0; i < vertices; i++) {
-                double x = i*dx + stanga;
-                array[i].position = sf::Vector2f(x, -parser.execute(x, parser.head));
-            }
+            fereastra.setView(default_view);
+
+            //printf("%f %f\n", camera.getCenter().x, camera.getSize().x);
+
+            buffer.check_null_term();
 
 
-            fereastra.draw(array);
+            function_display.text.setFillColor(textColors[currentTheme]);
+            debug_display.text.setFillColor(textColors[currentTheme]);
 
+            resetButton.draw(&fereastra, &default_view);
+            themeButton.draw(&fereastra, &default_view);
+            coordButton.draw(&fereastra, &default_view);
+            function_display.draw(&fereastra);
+            debug_display.draw(&fereastra);
+
+
+        if (VIEW_COORDS) {
+            sf::Vector2f coords = fereastra.mapPixelToCoords(sf::Mouse::getPosition(fereastra), camera);
+            coordBuffer.reset();
+
+            coordBuffer.appendf("X=%f, Y=%f\n", coords.x, -coords.y);
+
+            coord_display.text.setFillColor(textColors[currentTheme]);
+            coord_display.draw(&fereastra);
         }
-
         
         fereastra.display();
     }

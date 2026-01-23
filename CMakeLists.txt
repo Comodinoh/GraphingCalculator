@@ -7,6 +7,8 @@ target_include_directories(GraphingCalculator PRIVATE src)
 
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 
+target_compile_definitions(GraphingCalculator PRIVATE GRAPHICS_ROOT_DIR="${CMAKE_SOURCE_DIR}")
+
 if (CMAKE_VERSION VERSION_GREATER 3.12)
   set_property(TARGET GraphingCalculator PROPERTY CXX_STANDARD 20)
 endif()
